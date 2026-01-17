@@ -7,16 +7,14 @@ from homeassistant.core import HomeAssistant, Event
 from homeassistant.const import STATE_ON, STATE_OFF
 from homeassistant.util import dt as dt_util
 from homeassistant.helpers.typing import ConfigType
-from homeassistant.helpers import discovery # <--- התיקון: ייבוא ישיר
+from homeassistant.helpers import discovery
 
 _LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "smart_boiler"
-
-# --- הגדרות בדיקה ---
 DRY_RUN = True 
 
-# --- ישויות ---
+# ודא שזה השם הנכון של הדוד שלך!
 BOILER_SWITCH_ENTITY = "switch.shelly_shsw_1_8caab54b957d"
 TEMP_RATE_ENTITY = "sensor.water_temp_change_rate"
 PEOPLE_COUNTER_ENTITY = "input_number.number_of_shower_people"
@@ -26,33 +24,48 @@ last_shower_time = None
 
 def setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the Smart Boiler AI component."""
-    if DRY_RUN:
-        _LOGGER.warning("⚠️ Smart Boiler AI started in DRY RUN mode! No actions will be taken.")
-    else:
-        _LOGGER.info("Smart Boiler AI started in ACTIVE mode.")
+    _LOGGER.warning("⚠️ Smart Boiler AI: DEBUG MODE STARTED (Dry Run: %s)", DRY_RUN)
 
-    # --- התיקון: שימוש בפונקציה שיובאה ---
     discovery.load_platform(hass, "sensor", DOMAIN, {}, config)
     discovery.load_platform(hass, "number", DOMAIN, {}, config)
 
-    # --- 1. לוגיקת תיקון עצמי ---
+    # --- מאזין לשינויים בדוד (לוגיקה מורחבת לדיבוג) ---
     async def handle_boiler_state_change(event: Event):
         entity_id = event.data.get("entity_id")
-        new_state = event.data.get("new_state")
-        old_state = event.data.get("old_state")
-
-        if entity_id != BOILER_SWITCH_ENTITY or new_state is None or old_state is None:
+        
+        # אנחנו מסננים רק את הדוד
+        if entity_id != BOILER_SWITCH_ENTITY:
             return
 
-        # זיהוי הדלקה ידנית
-        if new_state.state == STATE_ON and old_state.state == STATE_OFF:
-            user_id = new_state.context.user_id
-            if user_id: 
-                _LOGGER.info("🔍 Detection: Manual boost detected.")
-                await adjust_threshold(hass, decrease=True)
+        new_state = event.data.get("new_state")
+        old_state = event.data.get("old_state")
+        
+        if new_state is None or old_state is None:
+            return
 
-    # --- 2. לוגיקת זיהוי מקלחות ---
+        # --- הדפסת דיבוג: מה המערכת רואה? ---
+        user_id = new_state.context.user_id
+        parent_id = new_state.context.parent_id
+        
+        _LOGGER.warning(
+            "🕵️ DEBUG: Boiler changed! %s -> %s | User ID: %s | Context ID: %s",
+            old_state.state,
+            new_state.state,
+            user_id,
+            new_state.context.id
+        )
+
+        # הלוגיקה המקורית (זיהוי הדלקה ידנית)
+        if new_state.state == STATE_ON and old_state.state == STATE_OFF:
+            if user_id: 
+                _LOGGER.warning("✅ MATCH: Manual boost detected! Triggering learning.")
+                await adjust_threshold(hass, decrease=True)
+            else:
+                _LOGGER.warning("❌ IGNORED: Switch turned on, but no User ID found (Automatic?).")
+
+    # --- מאזין למקלחות ---
     async def handle_temp_rate_change(event: Event):
+        # (אותו קוד כמו מקודם, השארתי נקי)
         global last_shower_time
         entity_id = event.data.get("entity_id")
         new_state = event.data.get("new_state")
@@ -79,26 +92,24 @@ def setup(hass: HomeAssistant, config: ConfigType) -> bool:
             return
 
         shower_detected = False
-        detection_method = ""
+        method = ""
 
         if rate < -1.5:
             shower_detected = True
-            detection_method = "Strong Drop"
+            method = "Strong Drop"
         elif rate < -0.3 and is_heating:
             shower_detected = True
-            detection_method = "Heating Drop"
+            method = "Heating Drop"
 
         if shower_detected:
-            msg = f"🚿 Shower detected via {detection_method}!"
-            
+            msg = f"🚿 Shower detected ({method})!"
             if DRY_RUN:
-                _LOGGER.info(f"[DRY RUN] Would have decremented counter. {msg}")
+                _LOGGER.warning("[DRY RUN] %s (Would decrement counter)", msg)
             else:
-                _LOGGER.info(f"{msg} Decrementing counter.")
+                _LOGGER.warning("%s Decrementing counter.", msg)
                 last_shower_time = now
                 await hass.services.async_call(
-                    "input_number", "decrement",
-                    {"entity_id": PEOPLE_COUNTER_ENTITY}
+                    "input_number", "decrement", {"entity_id": PEOPLE_COUNTER_ENTITY}
                 )
 
     hass.bus.listen("state_changed", handle_boiler_state_change)
@@ -109,22 +120,21 @@ async def adjust_threshold(hass: HomeAssistant, decrease: bool):
     """Adjust the sensitivity threshold dynamically."""
     threshold_state = hass.states.get(THRESHOLD_ENTITY)
     if threshold_state is None:
+        _LOGGER.error("Cannot find threshold entity %s", THRESHOLD_ENTITY)
         return
 
-    current_value = float(threshold_state.state)
-    
+    current = float(threshold_state.state)
     if decrease:
-        new_value = max(0, current_value - 5)
-        log_msg = f"Learning: Decreasing threshold from {current_value} to {new_value}"
+        new_val = max(0, current - 5)
+        log = f"📉 LEARNING: Decreasing threshold {current} -> {new_val}"
     else:
-        new_value = min(100, current_value + 2)
-        log_msg = f"Learning: Increasing threshold from {current_value} to {new_value}"
+        new_val = min(100, current + 2)
+        log = f"📈 LEARNING: Increasing threshold {current} -> {new_val}"
 
     if DRY_RUN:
-        _LOGGER.info(f"[DRY RUN] Would have updated threshold: {log_msg}")
+        _LOGGER.warning("[DRY RUN] %s", log)
     else:
-        _LOGGER.info(log_msg)
+        _LOGGER.warning(log)
         await hass.services.async_call(
-            "number", "set_value",
-            {"entity_id": THRESHOLD_ENTITY, "value": new_value}
+            "number", "set_value", {"entity_id": THRESHOLD_ENTITY, "value": new_val}
         )
