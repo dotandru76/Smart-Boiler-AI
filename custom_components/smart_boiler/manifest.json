@@ -1,0 +1,11 @@
+{
+  "domain": "smart_boiler",
+  "name": "Smart Boiler AI",
+  "codeowners": ["@dotandru76"],
+  "config_flow": false,
+  "documentation": "https://github.com/dotandru76/Smart-Boiler-AI",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/dotandru76/Smart-Boiler-AI/issues",
+  "requirements": [],
+  "version": "1.0.0"
+}
