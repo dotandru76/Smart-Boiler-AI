@@ -7,14 +7,13 @@ from homeassistant.core import HomeAssistant, Event
 from homeassistant.const import STATE_ON, STATE_OFF
 from homeassistant.util import dt as dt_util
 from homeassistant.helpers.typing import ConfigType
+from homeassistant.helpers import discovery # <--- התיקון: ייבוא ישיר
 
 _LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "smart_boiler"
 
 # --- הגדרות בדיקה ---
-# True = מצב בטוח: רק כותב לוגים, לא משנה כלום במערכת
-# False = מצב חי: המערכת עובדת מלא
 DRY_RUN = True 
 
 # --- ישויות ---
@@ -32,8 +31,9 @@ def setup(hass: HomeAssistant, config: ConfigType) -> bool:
     else:
         _LOGGER.info("Smart Boiler AI started in ACTIVE mode.")
 
-    hass.helpers.discovery.load_platform(hass, "sensor", DOMAIN, {}, config)
-    hass.helpers.discovery.load_platform(hass, "number", DOMAIN, {}, config)
+    # --- התיקון: שימוש בפונקציה שיובאה ---
+    discovery.load_platform(hass, "sensor", DOMAIN, {}, config)
+    discovery.load_platform(hass, "number", DOMAIN, {}, config)
 
     # --- 1. לוגיקת תיקון עצמי ---
     async def handle_boiler_state_change(event: Event):
