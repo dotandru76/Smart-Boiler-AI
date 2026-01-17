@@ -14,7 +14,7 @@ _LOGGER = logging.getLogger(__name__)
 DOMAIN = "smart_boiler"
 DRY_RUN = True 
 
-# ודא שזה השם הנכון של הדוד שלך!
+# הגדרות
 BOILER_SWITCH_ENTITY = "switch.shelly_shsw_1_8caab54b957d"
 TEMP_RATE_ENTITY = "sensor.water_temp_change_rate"
 PEOPLE_COUNTER_ENTITY = "input_number.number_of_shower_people"
@@ -29,11 +29,9 @@ def setup(hass: HomeAssistant, config: ConfigType) -> bool:
     discovery.load_platform(hass, "sensor", DOMAIN, {}, config)
     discovery.load_platform(hass, "number", DOMAIN, {}, config)
 
-    # --- מאזין לשינויים בדוד (לוגיקה מורחבת לדיבוג) ---
+    # --- לוגיקת הלמידה (Learning) ---
     async def handle_boiler_state_change(event: Event):
         entity_id = event.data.get("entity_id")
-        
-        # אנחנו מסננים רק את הדוד
         if entity_id != BOILER_SWITCH_ENTITY:
             return
 
@@ -43,29 +41,15 @@ def setup(hass: HomeAssistant, config: ConfigType) -> bool:
         if new_state is None or old_state is None:
             return
 
-        # --- הדפסת דיבוג: מה המערכת רואה? ---
-        user_id = new_state.context.user_id
-        parent_id = new_state.context.parent_id
-        
-        _LOGGER.warning(
-            "🕵️ DEBUG: Boiler changed! %s -> %s | User ID: %s | Context ID: %s",
-            old_state.state,
-            new_state.state,
-            user_id,
-            new_state.context.id
-        )
-
-        # הלוגיקה המקורית (זיהוי הדלקה ידנית)
+        # זיהוי הדלקה (Manual Boost)
         if new_state.state == STATE_ON and old_state.state == STATE_OFF:
-            if user_id: 
-                _LOGGER.warning("✅ MATCH: Manual boost detected! Triggering learning.")
-                await adjust_threshold(hass, decrease=True)
-            else:
-                _LOGGER.warning("❌ IGNORED: Switch turned on, but no User ID found (Automatic?).")
+            # תיקון: הורדנו את הדרישה ל-user_id כדי לתפוס גם לחיצות פיזיות
+            # כרגע ב-Dry Run אין סכנה ללולאה אינסופית
+            _LOGGER.warning("✅ MATCH: Boost detected! Triggering learning logic.")
+            await adjust_threshold(hass, decrease=True)
 
-    # --- מאזין למקלחות ---
+    # --- לוגיקת זיהוי מקלחות ---
     async def handle_temp_rate_change(event: Event):
-        # (אותו קוד כמו מקודם, השארתי נקי)
         global last_shower_time
         entity_id = event.data.get("entity_id")
         new_state = event.data.get("new_state")
@@ -120,7 +104,6 @@ async def adjust_threshold(hass: HomeAssistant, decrease: bool):
     """Adjust the sensitivity threshold dynamically."""
     threshold_state = hass.states.get(THRESHOLD_ENTITY)
     if threshold_state is None:
-        _LOGGER.error("Cannot find threshold entity %s", THRESHOLD_ENTITY)
         return
 
     current = float(threshold_state.state)
